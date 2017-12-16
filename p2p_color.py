@@ -16,10 +16,6 @@ def natural_sort(l):
     alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
     return sorted(l, key = alphanum_key)
 
-def lambda_rule(epoch):
-    lr_l = 1.0 - max(0, epoch + 1 + 1 - 100) / float(100 + 1)
-    return lr_l
-
 def plot_image(img_tensor, fName):
     # restore the normalization of the image before making PIL
     pilimg = transforms.ToPILImage()(img_tensor*0.5 + 0.5)    
@@ -217,7 +213,7 @@ class Generator(nn.Module):
         self.dlayr2 = cnnblock(num_filters*2, num_filters, True, True, True, False)
 
         self.dlayr1 = nn.Sequential(*[
-            nn.ReLU(), nn.ConvTranspose2d(num_filters, output_nc, 3, 2, 1, bias=False),
+            nn.ReLU(), nn.ConvTranspose2d(num_filters, output_nc, 4, 2, 1, bias=False),
             nn.Tanh()
         ])
         
@@ -252,7 +248,7 @@ def init_model(mdl):
 
 def train(niter):
     # --gray to rgb
-    input_nc, output_nc, num_filters, l1_weight = 1, 3, 64, 100
+    input_nc, output_nc, num_filters, l1_weight = 1, 3, 64, 60
     PATCH_SIZE = 30
     netG = GeneratorUNet(input_nc, output_nc, num_filters)
     init_model(netG)
@@ -274,11 +270,9 @@ def train(niter):
     optimD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
     optimG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
     
-    d_sched = lr_scheduler.LambdaLR(optimD, lr_lambda=lambda_rule)
-    g_sched = lr_scheduler.LambdaLR(optimG, lr_lambda=lambda_rule)
-    
+    overall_disc_loss_val = []
     total_loss_val = []
-    for epoch in range(niter*2 + 1):
+    for epoch in range(niter):
         disc_loss = []
         for i_batch, sample_batch in enumerate(train_dataloader):
             # -- label to identify soruce as real - 1 or fake - 0
@@ -298,7 +292,7 @@ def train(niter):
             # -- train on real
             label_src_.data.fill_(1)
             d_prob = netD(torch.cat([photo, sketch], 1)) # the discriminator (is conditioned concat with input)
-            errD_real = criterionBCE(d_prob, label_src_)*0.5
+            errD_real = criterionBCE(d_prob, label_src_)
             errD_real.backward()
             
             # -- train on fake
@@ -307,7 +301,7 @@ def train(niter):
             fake = x_hat.detach() # so we prevent backpropogating into G            
                 
             d_prob = netD(torch.cat([fake, sketch], 1))            
-            errD_fake = criterionBCE(d_prob, label_src_)*0.5
+            errD_fake = criterionBCE(d_prob, label_src_)
             errD_fake.backward()
             
             # half the objective value as an indirect way to make learning D slower than G
@@ -335,6 +329,7 @@ def train(niter):
             optimG.step()
             
             disc_loss.append(errD.data[0])
+            total_loss_val.append((errG + errD).data[0])
             
             if epoch % 10 == 0:
                 for fli, flN in enumerate(path):
@@ -343,18 +338,16 @@ def train(niter):
                         plot_image(sketch[fli,:,:,:].data.cpu(), "sketch_{}_{}".format(epoch, flN))
                         plot_image(fake[fli,:,:,:].data.cpu(), "fake_{}_{}".format(epoch, flN))
 
-        d_sched.step()
-        g_sched.step()
-        total_loss_val.extend(disc_loss)
+        overall_disc_loss_val.extend(disc_loss)
         print('Disciminator Loss after epoch:', epoch, ' is :', sum(disc_loss)/len(disc_loss))            
         
-        if epoch % 10 == 0:            
-            torch.save(netG.state_dict(), './cmp_g_plain.pth')
-            torch.save(netD.state_dict(), './cmp_d_plain.pth')
-    np.save('cmp_t_loss_plain.npy', np.array(total_loss_val))
+    torch.save(netG.state_dict(), './p2p_plain.pth')
+    torch.save(netD.state_dict(), './p2p_plain.pth')
+    np.save('total_loss_plain.npy', np.array(total_loss_val))
+    np.save('overall_disc_loss_plain.npy', np.array(overall_disc_loss_val))
 
 BATCH_SIZE=64
 train_dataset = ImageNetData(train=True)
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
 print("Training on images:", len(train_dataset))
-train(100)
+train(300)
